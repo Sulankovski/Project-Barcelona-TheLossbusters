@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
 
     const searchPrompt = buildSearchPrompt(name.trim(), country, additionalInfo, caseContext)
 
-    const aiResponse = await fetch('https://api.lovable.dev/v1/chat/completions', {
+    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${LOVABLE_API_KEY}`,
