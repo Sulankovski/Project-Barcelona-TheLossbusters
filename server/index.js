@@ -109,53 +109,82 @@ const TOOLS = [
   },
   {
     name: 'finish',
-    description: 'Signal that research is complete and return all collected data.',
+    description: 'Signal that research is complete and return all collected profiles.',
     input_schema: {
       type: 'object',
       properties: {
-        data: {
-          type: 'object',
-          description: 'Structured LinkedIn profile data',
-          properties: {
-            name: { type: 'string' },
-            headline: { type: 'string' },
-            location: { type: 'string' },
-            current_company: { type: 'string' },
-            profile_url: { type: 'string' },
-            about: { type: 'string' },
-            experience: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  title: { type: 'string' },
-                  company: { type: 'string' },
-                  duration: { type: 'string' },
-                  description: { type: 'string' },
+        profiles: {
+          type: 'array',
+          description: 'Up to 5 LinkedIn profiles found',
+          items: {
+            type: 'object',
+            properties: {
+              name:             { type: 'string' },
+              headline:         { type: 'string' },
+              location:         { type: 'string' },
+              current_company:  { type: 'string' },
+              profile_url:      { type: 'string' },
+              match_confidence: { type: 'string', description: 'HIGH / MEDIUM / LOW' },
+              about:            { type: 'string' },
+              experience: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    title:       { type: 'string' },
+                    company:     { type: 'string' },
+                    duration:    { type: 'string' },
+                    description: { type: 'string' },
+                  },
                 },
               },
-            },
-            education: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  school: { type: 'string' },
-                  degree: { type: 'string' },
-                  years: { type: 'string' },
+              education: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    school: { type: 'string' },
+                    degree: { type: 'string' },
+                    years:  { type: 'string' },
+                  },
                 },
               },
+              skills:      { type: 'array', items: { type: 'string' } },
+              connections: { type: 'string' },
+              notes:       { type: 'string' },
             },
-            skills: { type: 'array', items: { type: 'string' } },
-            connections: { type: 'string' },
-            notes: { type: 'string', description: 'Any extra observations' },
           },
         },
+        search_notes: { type: 'string', description: 'Summary of what was searched and found' },
       },
-      required: ['data'],
+      required: ['profiles'],
     },
   },
 ];
+
+// ─── Force Claude to flush partial results when the iteration limit is hit ────
+
+async function forceFinish(messages, tools, label) {
+  console.log(`[${label}] Iteration limit reached — requesting partial results.`);
+  messages.push({
+    role: 'user',
+    content: 'You have reached the tool call limit. Call finish() RIGHT NOW with every profile you have collected so far, even if incomplete. Do not call any other tool.',
+  });
+
+  const response = await client.messages.create({
+    model: 'claude-opus-4-6',
+    max_tokens: 4096,
+    tools,
+    messages,
+  });
+
+  for (const block of response.content ?? []) {
+    if (block.type === 'tool_use' && block.name === 'finish') {
+      return { profiles: block.input.profiles ?? [], search_notes: block.input.search_notes ?? 'Reached iteration limit — partial results.' };
+    }
+  }
+  return null;
+}
 
 // ─── Execute a single Playwright tool call ────────────────────────────────────
 
@@ -333,24 +362,39 @@ async function runLinkedInAgent({ name: targetName, country, phone, address, add
       content: `You are a LinkedIn research agent with control of a real browser via Playwright tools.
 You are already logged in to LinkedIn.
 
-Your goal: find the LinkedIn profile that best matches the person described below, then extract as much information as possible.
+Your goal: find and return the first 5 LinkedIn profiles for the name below.
 
 Target person:
 - Full name: ${targetName}${contextBlock}
 
-Strategy:
-1. Navigate to LinkedIn people search: https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(targetName)}
-2. Read the search results with get_page_text. You will see multiple profiles — evaluate each one against the known details above (country, phone, address, additional info) to identify the best match.
-3. If the country is known, also try the filtered URL: https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(targetName)}&geoUrn=${encodeURIComponent(country || '')} to narrow results.
-4. Navigate to the profile that most closely matches all known details.
-5. Use get_page_text to read the full profile.
-6. Extract: full name, headline/job title, location, current company, about section, work experience (title + company + duration), education, skills, connection count.
-7. Call finish() with all the structured data and a note explaining why this profile was chosen as the best match.
+─── STEP-BY-STEP INSTRUCTIONS ───────────────────────────────────────────
 
-Rules:
-- Prefer people profiles (/in/) over company pages (/company/).
-- If none of the first results match well, try a refined search with additional keywords (e.g. company name or city from the known details).
-- Be thorough but efficient — you have up to 20 tool calls.`,
+Step 1 — Navigate directly to the LinkedIn people search:
+  https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(targetName)}
+
+Step 2 — Read the search results:
+  - get_page_text to see the list of people
+  - get_links to extract profile URLs (look for linkedin.com/in/ links)
+  - Identify the first 5 profile URLs from the results
+
+Step 3 — Visit each of the 5 profiles one by one:
+  For each profile URL:
+  a. navigate to the profile page
+  b. wait 300ms
+  c. get_page_text to read name, headline, location, company, about, experience, education, skills, connections
+  d. Record the data and assign match_confidence HIGH/MEDIUM/LOW vs the known details
+
+Step 4 — After visiting all 5 (or fewer if less exist), call finish() immediately.
+
+─── RULES ───────────────────────────────────────────────────────────────
+- Stop at 5 profiles — do not look for more.
+- Always wait 300ms between profiles (use the wait tool).
+- Do not spend more than 3 tool calls per profile.
+- Prefer /in/ profile URLs over /company/ pages.
+- If fewer than 5 results exist, collect whatever is there.
+- If no results found, call finish() with an empty profiles array and explain in search_notes.
+- Never stop without calling finish().
+- You have up to 25 tool calls.`,
     },
   ];
 
@@ -382,8 +426,8 @@ Rules:
 
           let output;
           if (block.name === 'finish') {
-            result = block.input.data;
-            output = 'Data collected successfully.';
+            result = { profiles: block.input.profiles ?? [], search_notes: block.input.search_notes };
+            output = `Collected ${result.profiles.length} profile(s).`;
           } else {
             output = await executeTool(page, block.name, block.input);
           }
@@ -401,6 +445,11 @@ Rules:
 
         if (result) break;
       }
+    }
+
+    // If loop ended without finish(), ask Claude to flush whatever it found
+    if (!result) {
+      result = await forceFinish(messages, TOOLS, 'LinkedIn Bot');
     }
   } finally {
     await browser.close();
@@ -427,7 +476,14 @@ app.post('/api/linkedin-bot', async (req, res) => {
       address: address?.trim(),
       additionalInfo: additionalInfo?.trim(),
     });
-    if (!data) return res.status(500).json({ error: 'Agent finished without returning data' });
+
+    if (!data || !data.profiles) {
+      return res.status(404).json({ error: `No LinkedIn profiles found for "${name.trim()}".` });
+    }
+    if (data.profiles.length === 0) {
+      return res.status(404).json({ error: `No LinkedIn profiles found for "${name.trim()}". ${data.search_notes ?? ''}` });
+    }
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('[LinkedIn Bot] Error:', err);
@@ -701,6 +757,11 @@ Step 4 — After visiting all 5 (or fewer if less than 5 exist), call finish() i
 
         if (result) break;
       }
+    }
+
+    // If loop ended without finish(), ask Claude to flush whatever it found
+    if (!result) {
+      result = await forceFinish(messages, FACEBOOK_TOOLS, 'Facebook Bot');
     }
   } finally {
     await browser.close();
