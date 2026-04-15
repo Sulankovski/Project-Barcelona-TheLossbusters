@@ -1,8 +1,11 @@
 import { useState } from "react";
-import { Radar, Shield, Search, Target, Loader2 } from "lucide-react";
+import { Radar, Shield, Search, Target, Loader2, ExternalLink } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import EnrichmentResults from "@/components/EnrichmentResults";
+import LinkedInBotResults from "@/components/LinkedInBotResults";
 import { normalizeEnrichmentResult } from "@/lib/enrichment";
+
+const LINKEDIN_BOT_URL = "http://localhost:3001";
 
 export default function Index() {
   const [name, setName] = useState("");
@@ -14,6 +17,11 @@ export default function Index() {
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanStage, setScanStage] = useState(0);
+
+  // LinkedIn bot state
+  const [isLinkedInRunning, setIsLinkedInRunning] = useState(false);
+  const [linkedInResult, setLinkedInResult] = useState<any>(null);
+  const [linkedInError, setLinkedInError] = useState<string | null>(null);
 
   const scanStages = [
     "Initializing intelligence agent...",
@@ -27,6 +35,43 @@ export default function Index() {
     "Generating negotiation strategy...",
     "Compiling intelligence report...",
   ];
+
+  const runLinkedInBot = async () => {
+    if (!name.trim()) return;
+    setIsLinkedInRunning(true);
+    setLinkedInError(null);
+    setLinkedInResult(null);
+
+    try {
+      const res = await fetch(`${LINKEDIN_BOT_URL}/api/linkedin-bot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          country: country.trim() || undefined,
+          phone: phone.trim() || undefined,
+          address: address.trim() || undefined,
+          additionalInfo: additionalInfo.trim() || undefined,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? "LinkedIn bot failed");
+      }
+
+      setLinkedInResult(json.data);
+    } catch (err: any) {
+      console.error("LinkedIn bot error:", err);
+      setLinkedInError(
+        err.message === "Failed to fetch"
+          ? "Cannot reach LinkedIn Bot server. Run: cd server && npm install && node index.js"
+          : err.message ?? "LinkedIn bot failed"
+      );
+    } finally {
+      setIsLinkedInRunning(false);
+    }
+  };
 
   const runSearch = async () => {
     if (!name.trim()) return;
@@ -152,17 +197,30 @@ export default function Index() {
               value={additionalInfo}
               onChange={e => setAdditionalInfo(e.target.value)}
             />
-            <button
-              onClick={runSearch}
-              disabled={!name.trim() || isSearching}
-              className="w-full bg-primary text-primary-foreground font-mono text-sm font-medium py-3 rounded flex items-center justify-center gap-2 disabled:opacity-50 hover:opacity-90 transition-opacity"
-            >
-              {isSearching ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Running Intelligence Scan...</>
-              ) : (
-                <><Target className="w-4 h-4" /> Launch AI Intelligence Agent</>
-              )}
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={runSearch}
+                disabled={!name.trim() || isSearching}
+                className="w-full bg-primary text-primary-foreground font-mono text-sm font-medium py-3 rounded flex items-center justify-center gap-2 disabled:opacity-50 hover:opacity-90 transition-opacity"
+              >
+                {isSearching ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Scanning...</>
+                ) : (
+                  <><Target className="w-4 h-4" /> Launch AI Intelligence Agent</>
+                )}
+              </button>
+              <button
+                onClick={runLinkedInBot}
+                disabled={!name.trim() || isLinkedInRunning}
+                className="w-full bg-blue-600 text-white font-mono text-sm font-medium py-3 rounded flex items-center justify-center gap-2 disabled:opacity-50 hover:opacity-90 transition-opacity"
+              >
+                {isLinkedInRunning ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Bot Running...</>
+                ) : (
+                  <><ExternalLink className="w-4 h-4" /> Use LinkedIn Bot</>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -201,6 +259,29 @@ export default function Index() {
             <p className="text-xs font-mono text-red">⚠ {error}</p>
           </div>
         )}
+
+        {/* LinkedIn Bot loading */}
+        {isLinkedInRunning && (
+          <div className="bg-surface-2 border border-blue-500/30 rounded-md p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              <span className="text-xs font-mono text-blue-400">LINKEDIN BOT ACTIVE — BROWSER AGENT RUNNING...</span>
+            </div>
+            <p className="text-[11px] font-mono text-muted-foreground">
+              A browser window has opened. The agent is navigating LinkedIn to find <span className="text-foreground">{name}</span>. This may take 30–60 seconds.
+            </p>
+          </div>
+        )}
+
+        {/* LinkedIn Bot error */}
+        {linkedInError && (
+          <div className="bg-surface-2 border border-blue-500/20 rounded-md p-3">
+            <p className="text-xs font-mono text-blue-400">⚠ LinkedIn Bot: {linkedInError}</p>
+          </div>
+        )}
+
+        {/* LinkedIn Bot results */}
+        {linkedInResult && <LinkedInBotResults data={linkedInResult} />}
 
         {/* Results */}
         {result && (
