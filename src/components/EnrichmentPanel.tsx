@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Case, EnrichmentData } from "@/data/cases";
 import { Search, Globe, User, Briefcase, MapPin, Phone, Shield, AlertTriangle, ExternalLink, Loader2, Sparkles, MessageSquare, Target } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { normalizeEnrichmentResult } from "@/lib/enrichment";
 import LeverageGraph from "./intelligence/LeverageGraph";
 import IdentityAmbiguity from "./intelligence/IdentityAmbiguity";
 import RecoveryEstimator from "./intelligence/RecoveryEstimator";
@@ -63,7 +64,7 @@ export default function EnrichmentPanel({ caseData }: Props) {
         additionalInfo,
       ].filter(Boolean).join("\n");
 
-      const { data, error: fnError } = await supabase.functions.invoke('enrich-debtor', {
+      const request = supabase.functions.invoke('enrich-debtor', {
         body: {
           name: name.trim(),
           country: country || caseData.country,
@@ -78,10 +79,17 @@ export default function EnrichmentPanel({ caseData }: Props) {
         },
       });
 
+      const timeoutMs = 45000;
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Scan timed out after 45s. Check network or Supabase function status.')), timeoutMs);
+      });
+
+      const { data, error: fnError } = await Promise.race([request, timeout]);
+
       if (fnError) throw new Error(fnError.message || 'Enrichment failed');
       if (!data?.success) throw new Error(data?.error || 'Unknown error');
 
-      setAiResult(data.data);
+      setAiResult(normalizeEnrichmentResult(data.data));
     } catch (err: any) {
       console.error('Enrichment error:', err);
       setError(err.message || 'Failed to run enrichment');

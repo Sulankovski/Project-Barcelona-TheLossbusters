@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
 
     let enrichmentResult
     try {
-      enrichmentResult = JSON.parse(content)
+      enrichmentResult = parseAiJson(content)
     } catch {
       enrichmentResult = { raw_text: content, parse_error: true }
     }
@@ -192,4 +192,37 @@ function buildSearchPrompt(name: string, country?: string, additionalInfo?: stri
   prompt += `\n\nSearch thoroughly using all available public intelligence methods. For each finding, note the source type and confidence level. If this is a common name, identify multiple possible matches and rank them by likelihood. Be honest about what you cannot determine.`
 
   return prompt
+}
+
+function parseAiJson(content: unknown) {
+  if (typeof content !== 'string') {
+    throw new Error('AI content is not a string')
+  }
+
+  // Direct parse first (fast path).
+  try {
+    return JSON.parse(content)
+  } catch {
+    // fall through to best-effort repair
+  }
+
+  // Strip markdown code fences if model wrapped output in ```json ... ```
+  const withoutFences = content
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
+
+  // Keep only the outermost object to avoid stray prose before/after JSON.
+  const firstBrace = withoutFences.indexOf('{')
+  const lastBrace = withoutFences.lastIndexOf('}')
+  const objectSlice =
+    firstBrace >= 0 && lastBrace > firstBrace
+      ? withoutFences.slice(firstBrace, lastBrace + 1)
+      : withoutFences
+
+  // Remove trailing commas before } or ] which are common LLM JSON mistakes.
+  const cleaned = objectSlice.replace(/,\s*([}\]])/g, '$1')
+
+  return JSON.parse(cleaned)
 }

@@ -9,8 +9,42 @@ interface Props {
 }
 
 export default function EnrichmentResults({ result, caseData, name }: Props) {
+  const hasStructuredSections = Boolean(
+    result?.summary ||
+    result?.recovery_outlook ||
+    typeof result?.overall_confidence === "number" ||
+    result?.identity_matches?.length > 0 ||
+    result?.negotiation_strategy ||
+    result?.employment ||
+    result?.business_connections?.length > 0 ||
+    result?.social_presence?.length > 0 ||
+    result?.possible_assets?.length > 0 ||
+    result?.contact_alternatives?.length > 0 ||
+    result?.location_signals?.length > 0 ||
+    result?.leverage_points?.length > 0 ||
+    result?.risk_indicators?.length > 0 ||
+    (result?.lifestyle_signals && (result?.lifestyle_signals?.observed?.length > 0 || result?.lifestyle_signals?.inconsistencies?.length > 0)) ||
+    result?.evidence_chain?.length > 0 ||
+    result?.negative_signals?.length > 0 ||
+    result?.intelligence_gaps?.length > 0
+  );
+
   return (
     <div className="space-y-3 animate-fade-in">
+      {/* Fallback / parse error output */}
+      {!hasStructuredSections && (
+        <div className="bg-surface-2 border border-amber-dim rounded-md p-4">
+          <h4 className="text-[10px] font-mono tracking-wider text-amber mb-2">RAW INTELLIGENCE OUTPUT</h4>
+          {result?.parse_error && result?.raw_text ? (
+            <p className="text-[11px] text-foreground whitespace-pre-wrap break-words">{result.raw_text}</p>
+          ) : (
+            <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap break-words">
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+
       {/* Executive Summary */}
       {result.summary && (
         <div className="bg-surface-2 border border-primary/30 rounded-md p-4 glow-amber">

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Radar, Shield, Search, Target, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import EnrichmentResults from "@/components/EnrichmentResults";
+import { normalizeEnrichmentResult } from "@/lib/enrichment";
 
 export default function Index() {
   const [name, setName] = useState("");
@@ -45,7 +46,7 @@ export default function Index() {
         additionalInfo,
       ].filter(Boolean).join("\n");
 
-      const { data, error: fnError } = await supabase.functions.invoke('enrich-debtor', {
+      const request = supabase.functions.invoke('enrich-debtor', {
         body: {
           name: name.trim(),
           country: country || undefined,
@@ -53,10 +54,20 @@ export default function Index() {
         },
       });
 
+      const timeoutMs = 45000;
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Scan timed out after 45s. Check network or Supabase function status.')), timeoutMs);
+      });
+
+      const { data, error: fnError } = await Promise.race([request, timeout]);
+
       if (fnError) throw new Error(fnError.message || 'Search failed');
       if (!data?.success) throw new Error(data?.error || 'Unknown error');
+      if (!data?.data || typeof data.data !== 'object') {
+        throw new Error('Scan returned no usable results');
+      }
 
-      setResult(data.data);
+      setResult(normalizeEnrichmentResult(data.data));
     } catch (err: any) {
       console.error('Search error:', err);
       setError(err.message || 'Failed to run search');
