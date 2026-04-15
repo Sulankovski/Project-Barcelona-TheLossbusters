@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { Case, EnrichmentData } from "@/data/cases";
 import { Search, Globe, User, Briefcase, MapPin, Phone, Shield, AlertTriangle, ExternalLink, Loader2, Sparkles, MessageSquare } from "lucide-react";
+import LeverageGraph from "./intelligence/LeverageGraph";
+import IdentityAmbiguity from "./intelligence/IdentityAmbiguity";
+import RecoveryEstimator from "./intelligence/RecoveryEstimator";
+import NegativeSignalDetector from "./intelligence/NegativeSignalDetector";
+import LifestyleGap from "./intelligence/LifestyleGap";
+import DecisionEngine from "./intelligence/DecisionEngine";
+import MomentumTracker from "./intelligence/MomentumTracker";
+import EvidenceTree from "./intelligence/EvidenceTree";
 
 interface Props {
   caseData: Case;
@@ -17,7 +25,6 @@ export default function EnrichmentPanel({ caseData }: Props) {
     setIsEnriching(true);
     setEnrichment({ status: "enriching", confidence: 0, gaps: [] });
 
-    // Simulate enrichment with staged progress
     await new Promise(r => setTimeout(r, 1500));
     setEnrichment({
       status: "complete",
@@ -57,7 +64,7 @@ export default function EnrichmentPanel({ caseData }: Props) {
           <Search className="w-3.5 h-3.5" /> OSINT ENRICHMENT AGENT
         </h3>
         <p className="text-[11px] text-muted-foreground mb-3">
-          Enter a name and any additional information to activate the AI enrichment agent. The agent will search public sources to build an intelligence profile.
+          Enter a name and any additional information to activate the AI enrichment agent.
         </p>
         <div className="space-y-2">
           <input
@@ -86,7 +93,7 @@ export default function EnrichmentPanel({ caseData }: Props) {
         </div>
       </div>
 
-      {/* Enrichment being processed */}
+      {/* Scanning animation */}
       {enrichment?.status === "enriching" && (
         <div className="bg-surface-2 border border-border rounded-md p-4">
           <div className="flex items-center gap-2 mb-3">
@@ -94,8 +101,8 @@ export default function EnrichmentPanel({ caseData }: Props) {
             <span className="text-xs font-mono text-amber">SCANNING PUBLIC SOURCES...</span>
           </div>
           <div className="space-y-2">
-            {["Business registries", "Social media profiles", "Public records", "Domain lookups"].map((s, i) => (
-              <div key={s} className="flex items-center gap-2 text-xs font-mono text-muted-foreground animate-fade-in" style={{ animationDelay: `${i * 0.3}s` }}>
+            {["Business registries", "Social media profiles", "Public records", "Domain lookups", "Identity disambiguation", "Network mapping"].map((s, i) => (
+              <div key={s} className="flex items-center gap-2 text-xs font-mono text-muted-foreground animate-fade-in" style={{ animationDelay: `${i * 0.25}s` }}>
                 <Loader2 className="w-3 h-3 animate-spin text-amber" />
                 {s}
               </div>
@@ -104,13 +111,25 @@ export default function EnrichmentPanel({ caseData }: Props) {
         </div>
       )}
 
-      {/* Enrichment Results */}
+      {/* Full Intelligence Suite */}
       {enrichment?.status === "complete" && enrichment.profile && (
         <div className="space-y-3 animate-fade-in">
+          {/* Decision Engine — top priority */}
+          <DecisionEngine caseData={caseData} />
+
+          {/* Recovery Estimator */}
+          <RecoveryEstimator caseData={caseData} />
+
+          {/* Leverage Network Graph */}
+          <LeverageGraph caseData={caseData} name={name} />
+
+          {/* Identity Ambiguity */}
+          <IdentityAmbiguity caseData={caseData} name={name} />
+
           {/* Confidence */}
           <div className="bg-surface-2 border border-border rounded-md p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-mono tracking-wider text-muted-foreground">CONFIDENCE LEVEL</span>
+              <span className="text-[10px] font-mono tracking-wider text-muted-foreground">OVERALL CONFIDENCE</span>
               <span className="text-xs font-mono text-amber font-bold">{(enrichment.confidence * 100).toFixed(0)}%</span>
             </div>
             <div className="w-full h-1.5 bg-surface-3 rounded-full overflow-hidden">
@@ -127,6 +146,15 @@ export default function EnrichmentPanel({ caseData }: Props) {
           <ProfileSection icon={User} title="BUSINESS CONNECTIONS" items={enrichment.profile.business_connections ?? []} />
           <ProfileSection icon={AlertTriangle} title="RISK INDICATORS" items={enrichment.profile.risk_indicators ?? []} color="text-red" />
           <ProfileSection icon={Sparkles} title="LEVERAGE POINTS" items={enrichment.profile.leverage_points ?? []} color="text-green" />
+
+          {/* Evidence Tree */}
+          <EvidenceTree caseData={caseData} name={name} />
+
+          {/* Lifestyle Gap */}
+          <LifestyleGap caseData={caseData} />
+
+          {/* Negative Signal Detector */}
+          <NegativeSignalDetector caseData={caseData} />
 
           {/* Sources */}
           {enrichment.sources && enrichment.sources.length > 0 && (
@@ -162,6 +190,9 @@ export default function EnrichmentPanel({ caseData }: Props) {
               <p className="text-xs text-foreground leading-relaxed whitespace-pre-line">{enrichment.negotiation_strategy}</p>
             </div>
           )}
+
+          {/* Momentum Tracker — shows value created */}
+          <MomentumTracker caseData={caseData} />
         </div>
       )}
     </div>
