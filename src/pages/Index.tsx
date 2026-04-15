@@ -3,6 +3,7 @@ import { Radar, Shield, Search, Target, Loader2, ExternalLink } from "lucide-rea
 import { supabase } from "@/integrations/supabase/client";
 import EnrichmentResults from "@/components/EnrichmentResults";
 import LinkedInBotResults from "@/components/LinkedInBotResults";
+import FacebookBotResults from "@/components/FacebookBotResults";
 import { normalizeEnrichmentResult } from "@/lib/enrichment";
 
 const LINKEDIN_BOT_URL = "http://localhost:3001";
@@ -22,6 +23,11 @@ export default function Index() {
   const [isLinkedInRunning, setIsLinkedInRunning] = useState(false);
   const [linkedInResult, setLinkedInResult] = useState<any>(null);
   const [linkedInError, setLinkedInError] = useState<string | null>(null);
+
+  // Facebook bot state
+  const [isFacebookRunning, setIsFacebookRunning] = useState(false);
+  const [facebookResult, setFacebookResult] = useState<any>(null);
+  const [facebookError, setFacebookError] = useState<string | null>(null);
 
   const scanStages = [
     "Initializing intelligence agent...",
@@ -70,6 +76,40 @@ export default function Index() {
       );
     } finally {
       setIsLinkedInRunning(false);
+    }
+  };
+
+  const runFacebookBot = async () => {
+    if (!name.trim()) return;
+    setIsFacebookRunning(true);
+    setFacebookError(null);
+    setFacebookResult(null);
+
+    try {
+      const res = await fetch(`${LINKEDIN_BOT_URL}/api/facebook-bot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          country: country.trim() || undefined,
+          phone: phone.trim() || undefined,
+          address: address.trim() || undefined,
+          additionalInfo: additionalInfo.trim() || undefined,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Facebook bot failed");
+      setFacebookResult(json.data);
+    } catch (err: any) {
+      console.error("Facebook bot error:", err);
+      setFacebookError(
+        err.message === "Failed to fetch"
+          ? "Cannot reach bot server. Run: cd server && node index.js"
+          : err.message ?? "Facebook bot failed"
+      );
+    } finally {
+      setIsFacebookRunning(false);
     }
   };
 
@@ -197,7 +237,7 @@ export default function Index() {
               value={additionalInfo}
               onChange={e => setAdditionalInfo(e.target.value)}
             />
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={runSearch}
                 disabled={!name.trim() || isSearching}
@@ -206,7 +246,7 @@ export default function Index() {
                 {isSearching ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Scanning...</>
                 ) : (
-                  <><Target className="w-4 h-4" /> Launch AI Intelligence Agent</>
+                  <><Target className="w-4 h-4" /> AI Agent</>
                 )}
               </button>
               <button
@@ -215,9 +255,20 @@ export default function Index() {
                 className="w-full bg-blue-600 text-white font-mono text-sm font-medium py-3 rounded flex items-center justify-center gap-2 disabled:opacity-50 hover:opacity-90 transition-opacity"
               >
                 {isLinkedInRunning ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Bot Running...</>
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Running...</>
                 ) : (
-                  <><ExternalLink className="w-4 h-4" /> Use LinkedIn Bot</>
+                  <><ExternalLink className="w-4 h-4" /> LinkedIn Bot</>
+                )}
+              </button>
+              <button
+                onClick={runFacebookBot}
+                disabled={!name.trim() || isFacebookRunning}
+                className="w-full bg-blue-800 text-white font-mono text-sm font-medium py-3 rounded flex items-center justify-center gap-2 disabled:opacity-50 hover:opacity-90 transition-opacity"
+              >
+                {isFacebookRunning ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Running...</>
+                ) : (
+                  <><ExternalLink className="w-4 h-4" /> Facebook Bot</>
                 )}
               </button>
             </div>
@@ -282,6 +333,29 @@ export default function Index() {
 
         {/* LinkedIn Bot results */}
         {linkedInResult && <LinkedInBotResults data={linkedInResult} />}
+
+        {/* Facebook Bot loading */}
+        {isFacebookRunning && (
+          <div className="bg-surface-2 border border-blue-800/40 rounded-md p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              <span className="text-xs font-mono text-blue-400">FACEBOOK BOT ACTIVE — BROWSER AGENT RUNNING...</span>
+            </div>
+            <p className="text-[11px] font-mono text-muted-foreground">
+              A browser window has opened. The agent is searching Facebook for <span className="text-foreground">{name}</span>. This may take 30–60 seconds.
+            </p>
+          </div>
+        )}
+
+        {/* Facebook Bot error */}
+        {facebookError && (
+          <div className="bg-surface-2 border border-blue-800/30 rounded-md p-3">
+            <p className="text-xs font-mono text-blue-400">⚠ Facebook Bot: {facebookError}</p>
+          </div>
+        )}
+
+        {/* Facebook Bot results */}
+        {facebookResult && <FacebookBotResults data={facebookResult} />}
 
         {/* Results */}
         {result && (

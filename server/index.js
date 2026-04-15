@@ -18,6 +18,8 @@ const client = new Anthropic({ apiKey: process.env.API_KEY });
 
 const LINKEDIN_EMAIL    = process.env.LINKEDIN_EMAIL;
 const LINKEDIN_PASSWORD = process.env.LINKEDIN_PASSWORD;
+const FACEBOOK_EMAIL    = process.env.FACEBOOK_EMAIL;
+const FACEBOOK_PASSWORD = process.env.FACEBOOK_PASSWORD;
 
 // ─── Playwright tools exposed to Claude ──────────────────────────────────────
 
@@ -73,7 +75,7 @@ const TOOLS = [
   },
   {
     name: 'type_text',
-    description: 'Focus an input element and type text into it.',
+    description: 'Focus an input element and type text into it character by character (human-like).',
     input_schema: {
       type: 'object',
       properties: {
@@ -81,6 +83,28 @@ const TOOLS = [
         text: { type: 'string', description: 'Text to type' },
       },
       required: ['selector', 'text'],
+    },
+  },
+  {
+    name: 'press_key',
+    description: 'Press a keyboard key on the currently focused element (e.g. Enter, Tab, Escape).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Key name, e.g. "Enter", "Tab", "Escape"' },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'wait',
+    description: 'Pause for a short moment — use this when you land on a profile that does not match before navigating away, or any time a human would briefly pause.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ms: { type: 'number', description: 'Milliseconds to wait (max 3000)' },
+      },
+      required: ['ms'],
     },
   },
   {
@@ -135,15 +159,21 @@ const TOOLS = [
 
 // ─── Execute a single Playwright tool call ────────────────────────────────────
 
+const humanDelay = (min = 600, max = 1400) =>
+  new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
+
 async function executeTool(page, toolName, input) {
   switch (toolName) {
     case 'navigate': {
+      // Small random pre-navigation pause — like a human deciding where to go
+      await humanDelay(800, 1800);
       try {
         await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-        await page.waitForTimeout(2500);
       } catch {
         // partial load is fine
       }
+      // Random settle time after page loads
+      await humanDelay(1200, 2500);
       return `Navigated to ${input.url}. Current URL: ${page.url()}`;
     }
 
@@ -173,8 +203,9 @@ async function executeTool(page, toolName, input) {
 
     case 'click': {
       try {
+        await humanDelay(400, 900);
         await page.click(input.selector, { timeout: 8000 });
-        await page.waitForTimeout(1500);
+        await humanDelay(1000, 2000);
         return `Clicked ${input.selector}`;
       } catch (e) {
         return `Could not click ${input.selector}: ${e.message}`;
@@ -183,11 +214,30 @@ async function executeTool(page, toolName, input) {
 
     case 'type_text': {
       try {
-        await page.fill(input.selector, input.text);
-        return `Typed into ${input.selector}`;
+        await page.click(input.selector, { timeout: 5000 });
+        await humanDelay(300, 600);
+        // Type character by character with random delays
+        for (const char of input.text) {
+          await page.keyboard.type(char);
+          await new Promise(r => setTimeout(r, 40 + Math.random() * 80));
+        }
+        return `Typed "${input.text}" into ${input.selector}`;
       } catch (e) {
         return `Could not type into ${input.selector}: ${e.message}`;
       }
+    }
+
+    case 'press_key': {
+      await humanDelay(300, 600);
+      await page.keyboard.press(input.key);
+      await humanDelay(800, 1500);
+      return `Pressed ${input.key}. Current URL: ${page.url()}`;
+    }
+
+    case 'wait': {
+      const ms = Math.min(input.ms ?? 1000, 3000);
+      await new Promise(r => setTimeout(r, ms));
+      return `Waited ${ms}ms.`;
     }
 
     case 'finish':
@@ -268,6 +318,8 @@ async function runLinkedInAgent({ name: targetName, country, phone, address, add
     viewport: { width: 1280, height: 800 },
     locale: 'mk-MK',
     timezoneId: 'Europe/Skopje',
+    geolocation: { latitude: 41.9981, longitude: 21.4254 }, // Skopje, North Macedonia
+    permissions: ['geolocation'],
   });
 
   const page = await context.newPage();
@@ -383,11 +435,320 @@ app.post('/api/linkedin-bot', async (req, res) => {
   }
 });
 
+// ─── Facebook: login ──────────────────────────────────────────────────────────
+
+async function loginToFacebook(page) {
+  console.log('[Facebook Bot] Loading Facebook...');
+
+  page.setDefaultTimeout(300000); // 5 min — user needs time to log in
+  await page.goto('https://www.facebook.com/?locale=mk_MK', { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await page.waitForTimeout(1500);
+
+  // Check if already logged in by looking for feed-only DOM elements
+  const alreadyLoggedIn = await page.evaluate(() =>
+    !!(document.querySelector('[data-pagelet="Stories"]') ||
+       document.querySelector('[data-pagelet="FeedUnit_0"]') ||
+       document.querySelector('[aria-label="Create a post"]') ||
+       document.querySelector('[data-pagelet="LeftRail"]'))
+  );
+
+  if (alreadyLoggedIn) {
+    console.log('[Facebook Bot] Already logged in.');
+    return;
+  }
+
+  // Pre-fill credentials if the login form is visible — convenience only, no auto-submit
+  try {
+    const emailInput = page.locator('#email');
+    if (await emailInput.isVisible({ timeout: 3000 })) {
+      await emailInput.fill(FACEBOOK_EMAIL);
+      await page.waitForTimeout(300);
+      await page.locator('#pass').fill(FACEBOOK_PASSWORD);
+      console.log('[Facebook Bot] Credentials pre-filled.');
+    }
+  } catch {
+    // form not visible — user handles it
+  }
+
+  console.log('');
+  console.log('════════════════════════════════════════════════════');
+  console.log('  ACTION REQUIRED in the browser window:');
+  console.log('  Log in to Facebook (credentials are pre-filled).');
+  console.log('  Complete any CAPTCHA / 2FA if prompted.');
+  console.log('');
+  console.log('  *** The bot will NOT move until a logged-in     ***');
+  console.log('  *** Facebook feed element appears on the page.  ***');
+  console.log('  (timeout: 5 minutes)');
+  console.log('════════════════════════════════════════════════════');
+  console.log('');
+
+  // HARD BLOCK — wait for a DOM element that only exists on the real logged-in feed.
+  // This cannot be fooled by URL patterns.
+  // arg = null (no argument to pass into the page fn), options = third param
+  await page.waitForFunction(
+    () =>
+      !!(document.querySelector('[data-pagelet="Stories"]') ||
+         document.querySelector('[data-pagelet="FeedUnit_0"]') ||
+         document.querySelector('[data-pagelet="LeftRail"]') ||
+         document.querySelector('[aria-label="Create a post"]') ||
+         document.querySelector('[role="main"] form[method="post"]')),
+    null,
+    { timeout: 300000, polling: 300 },
+  );
+
+  await page.waitForTimeout(2000);
+  console.log(`[Facebook Bot] Login confirmed ✓ — feed detected. Starting search.`);
+}
+
+// ─── Facebook: TOOLS finish schema ───────────────────────────────────────────
+
+const FACEBOOK_FINISH_TOOL = {
+  name: 'finish',
+  description: 'Signal that research is complete and return all collected Facebook data.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      profiles: {
+        type: 'array',
+        description: 'All Facebook profiles found that match the search parameters',
+        items: {
+          type: 'object',
+          properties: {
+            name:                { type: 'string' },
+            profile_url:         { type: 'string' },
+            match_confidence:    { type: 'string', description: 'HIGH / MEDIUM / LOW — how well this profile matches the known details' },
+            location:            { type: 'string' },
+            hometown:            { type: 'string' },
+            relationship_status: { type: 'string' },
+            about:               { type: 'string' },
+            friends_count:       { type: 'string' },
+            photos_visible:      { type: 'boolean' },
+            work: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  employer: { type: 'string' },
+                  title:    { type: 'string' },
+                  duration: { type: 'string' },
+                },
+              },
+            },
+            education: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  school: { type: 'string' },
+                  degree: { type: 'string' },
+                  years:  { type: 'string' },
+                },
+              },
+            },
+            interests:        { type: 'array', items: { type: 'string' } },
+            recent_activity:  { type: 'array', items: { type: 'string' } },
+            contact_info: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  type:  { type: 'string' },
+                  value: { type: 'string' },
+                },
+              },
+            },
+            notes: { type: 'string' },
+          },
+        },
+      },
+      search_notes: { type: 'string', description: 'Summary of search attempts and why these profiles were selected' },
+    },
+    required: ['profiles'],
+  },
+};
+
+const FACEBOOK_TOOLS = [...TOOLS.filter(t => t.name !== 'finish'), FACEBOOK_FINISH_TOOL];
+
+// ─── Facebook: main agent loop ────────────────────────────────────────────────
+
+async function runFacebookAgent({ name: targetName, country, phone, address, additionalInfo }) {
+  console.log(`[Facebook Bot] Starting agent for: "${targetName}"`);
+
+  if (!FACEBOOK_EMAIL || !FACEBOOK_PASSWORD) {
+    throw new Error('FACEBOOK_EMAIL and FACEBOOK_PASSWORD must be set in .env');
+  }
+
+  const contextLines = [
+    country        && `Country/Region: ${country}`,
+    phone          && `Phone: ${phone}`,
+    address        && `Address: ${address}`,
+    additionalInfo && `Additional info: ${additionalInfo}`,
+  ].filter(Boolean);
+  const contextBlock = contextLines.length
+    ? `\n\nKnown details about this person (use these to pick the best match):\n${contextLines.map(l => `- ${l}`).join('\n')}`
+    : '';
+
+  const browser = await chromium.launch({
+    headless: false,
+    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+  });
+
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    viewport:   { width: 1280, height: 800 },
+    locale:     'mk-MK',
+    timezoneId: 'Europe/Skopje',
+    geolocation: { latitude: 41.9981, longitude: 21.4254 }, // Skopje, North Macedonia
+    permissions: ['geolocation'],
+  });
+
+  const page = await context.newPage();
+
+  await loginToFacebook(page);
+
+  const messages = [
+    {
+      role: 'user',
+      content: `You are a Facebook research agent controlling a real browser. You are already logged in to Facebook.
+
+Your goal: find and return the first 5 Facebook profiles for the name below.
+
+Target person:
+- Full name: ${targetName}${contextBlock}
+
+─── STEP-BY-STEP INSTRUCTIONS ───────────────────────────────────────────
+
+Step 1 — Navigate to the Facebook people search directly:
+  navigate to https://www.facebook.com/search/people/?q=${encodeURIComponent(targetName)}
+
+Step 2 — Read the search results:
+  - get_page_text to see the list of people
+  - get_links to extract profile URLs (look for facebook.com/<username> or facebook.com/profile.php?id=... links)
+  - Identify the first 5 profile URLs from the results
+
+Step 3 — Visit each of the 5 profiles one by one:
+  For each profile URL:
+  a. navigate to the profile page
+  b. wait 300ms
+  c. get_page_text to read the profile
+  d. navigate to profile URL + /about
+  e. get_page_text to read structured info (work, education, location, contact)
+  f. Note the data, assign match_confidence HIGH/MEDIUM/LOW vs the known details
+
+Step 4 — After visiting all 5 (or fewer if less than 5 exist), call finish() immediately.
+
+─── RULES ───────────────────────────────────────────────────────────────
+- Stop at 5 profiles — do not look for more.
+- Always wait 300ms between profiles.
+- Do not spend more than 3 tool calls per profile.
+- If the search returns fewer than 5 results, collect whatever is there.
+- If the search page is empty, try once more with: https://www.facebook.com/search/people/?q=${encodeURIComponent(targetName.split(' ').join('+'))}
+- If still nothing, call finish() with an empty profiles array and explain in search_notes.
+- Never stop without calling finish().
+- You have up to 30 tool calls — budget them carefully.`,
+    },
+  ];
+
+  let result = null;
+  const MAX_ITERATIONS = 30;
+
+  try {
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      const response = await client.messages.create({
+        model: 'claude-opus-4-6',
+        max_tokens: 4096,
+        tools: FACEBOOK_TOOLS,
+        messages,
+      });
+
+      console.log(`[Facebook Bot] Iteration ${i + 1}, stop_reason: ${response.stop_reason}`);
+
+      messages.push({ role: 'assistant', content: response.content });
+
+      if (response.stop_reason === 'end_turn') {
+        console.log('[Facebook Bot] Agent ended turn without calling finish.');
+        break;
+      }
+
+      if (response.stop_reason === 'tool_use') {
+        const toolResults = [];
+
+        for (const block of response.content) {
+          if (block.type !== 'tool_use') continue;
+
+          console.log(`[Facebook Bot] Tool: ${block.name}`, JSON.stringify(block.input).substring(0, 120));
+
+          let output;
+          if (block.name === 'finish') {
+            result = { profiles: block.input.profiles ?? [], search_notes: block.input.search_notes };
+            output = `Collected ${result.profiles.length} profile(s).`;
+          } else {
+            output = await executeTool(page, block.name, block.input);
+          }
+
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: String(output),
+          });
+
+          if (block.name === 'finish') break;
+        }
+
+        messages.push({ role: 'user', content: toolResults });
+
+        if (result) break;
+      }
+    }
+  } finally {
+    await browser.close();
+    console.log('[Facebook Bot] Browser closed.');
+  }
+
+  return result;
+}
+
+// ─── Facebook API endpoint ────────────────────────────────────────────────────
+
+app.post('/api/facebook-bot', async (req, res) => {
+  const { name, country, phone, address, additionalInfo } = req.body ?? {};
+
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return res.status(400).json({ error: 'name is required (min 2 chars)' });
+  }
+
+  try {
+    const data = await runFacebookAgent({
+      name: name.trim(),
+      country: country?.trim(),
+      phone: phone?.trim(),
+      address: address?.trim(),
+      additionalInfo: additionalInfo?.trim(),
+    });
+
+    if (!data || !data.profiles) {
+      return res.status(404).json({ error: `No Facebook profiles found for "${name.trim()}". The agent exhausted all search attempts.` });
+    }
+
+    if (data.profiles.length === 0) {
+      return res.status(404).json({ error: `No matching Facebook profiles found for "${name.trim()}". ${data.search_notes ?? ''}` });
+    }
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[Facebook Bot] Error:', err);
+    res.status(500).json({ error: err.message ?? 'Internal server error' });
+  }
+});
+
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.LINKEDIN_BOT_PORT ?? 3001;
 app.listen(PORT, () => {
-  console.log(`[LinkedIn Bot] Server running on http://localhost:${PORT}`);
-  console.log(`[LinkedIn Bot] LinkedIn account: ${LINKEDIN_EMAIL ?? '(not set)'}`);
-  console.log(`[LinkedIn Bot] Locale: mk-MK / Europe/Skopje`);
+  console.log(`[Bot Server] Running on http://localhost:${PORT}`);
+  console.log(`[Bot Server] LinkedIn account : ${LINKEDIN_EMAIL  ?? '(not set)'}`);
+  console.log(`[Bot Server] Facebook account : ${FACEBOOK_EMAIL  ?? '(not set)'}`);
+  console.log(`[Bot Server] Locale: mk-MK / Europe/Skopje`);
 });
