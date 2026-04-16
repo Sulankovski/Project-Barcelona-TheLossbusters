@@ -5,6 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
 import Anthropic from '@anthropic-ai/sdk';
+import FirecrawlApp from '@mendable/firecrawl-js';
 
 // Load .env from project root
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,19 @@ const LINKEDIN_EMAIL    = process.env.LINKEDIN_EMAIL;
 const LINKEDIN_PASSWORD = process.env.LINKEDIN_PASSWORD;
 const FACEBOOK_EMAIL    = process.env.FACEBOOK_EMAIL;
 const FACEBOOK_PASSWORD = process.env.FACEBOOK_PASSWORD;
+
+// ─── Persistent authenticated browser sessions ───────────────────────────────
+// Kept alive until the user closes the window — reused by the deep-search agent.
+
+let linkedInContext = null;  // Playwright BrowserContext
+let facebookContext = null;  // Playwright BrowserContext
+
+function watchBrowser(browser, label, clearFn) {
+  browser.on('disconnected', () => {
+    console.log(`[${label}] Browser window closed by user.`);
+    clearFn();
+  });
+}
 
 // ─── Playwright tools exposed to Claude ──────────────────────────────────────
 
@@ -359,23 +373,29 @@ async function runLinkedInAgent({ name: targetName, country, phone, address, add
     ? `\n\nKnown details about this person (use these to pick the best match):\n${contextLines.map(l => `- ${l}`).join('\n')}`
     : '';
 
-  const browser = await chromium.launch({
-    headless: false,
-    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
-  });
+  // Reuse existing authenticated session, or launch a new browser
+  if (!linkedInContext) {
+    const browser = await chromium.launch({
+      headless: false,
+      args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+    });
+    linkedInContext = await browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 800 },
+      locale: 'mk-MK',
+      timezoneId: 'Europe/Skopje',
+      geolocation: { latitude: 41.9981, longitude: 21.4254 },
+      permissions: ['geolocation'],
+    });
+    watchBrowser(browser, 'LinkedIn', () => { linkedInContext = null; });
+    console.log('[LinkedIn Bot] New browser launched.');
+  } else {
+    console.log('[LinkedIn Bot] Reusing existing authenticated session.');
+  }
 
-  const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    viewport: { width: 1280, height: 800 },
-    locale: 'mk-MK',
-    timezoneId: 'Europe/Skopje',
-    geolocation: { latitude: 41.9981, longitude: 21.4254 }, // Skopje, North Macedonia
-    permissions: ['geolocation'],
-  });
-
-  const page = await context.newPage();
+  const page = await linkedInContext.newPage();
 
   // Step 1: log in before handing control to Claude
   await loginToLinkedIn(page);
@@ -478,8 +498,8 @@ Step 4 — After visiting all 5 (or fewer if less exist), call finish() immediat
       result = await forceFinish(messages, TOOLS, 'LinkedIn Bot');
     }
   } finally {
-    await browser.close();
-    console.log('[LinkedIn Bot] Browser closed.');
+    await page.close();
+    console.log('[LinkedIn Bot] Research page closed (browser session kept alive).');
   }
 
   return result;
@@ -673,23 +693,29 @@ async function runFacebookAgent({ name: targetName, country, phone, address, add
     ? `\n\nKnown details about this person (use these to pick the best match):\n${contextLines.map(l => `- ${l}`).join('\n')}`
     : '';
 
-  const browser = await chromium.launch({
-    headless: false,
-    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
-  });
+  // Reuse existing authenticated session, or launch a new browser
+  if (!facebookContext) {
+    const browser = await chromium.launch({
+      headless: false,
+      args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+    });
+    facebookContext = await browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      viewport:   { width: 1280, height: 800 },
+      locale:     'mk-MK',
+      timezoneId: 'Europe/Skopje',
+      geolocation: { latitude: 41.9981, longitude: 21.4254 },
+      permissions: ['geolocation'],
+    });
+    watchBrowser(browser, 'Facebook', () => { facebookContext = null; });
+    console.log('[Facebook Bot] New browser launched.');
+  } else {
+    console.log('[Facebook Bot] Reusing existing authenticated session.');
+  }
 
-  const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    viewport:   { width: 1280, height: 800 },
-    locale:     'mk-MK',
-    timezoneId: 'Europe/Skopje',
-    geolocation: { latitude: 41.9981, longitude: 21.4254 }, // Skopje, North Macedonia
-    permissions: ['geolocation'],
-  });
-
-  const page = await context.newPage();
+  const page = await facebookContext.newPage();
 
   await loginToFacebook(page);
 
@@ -794,8 +820,8 @@ Step 4 — After visiting all 5 (or fewer if less than 5 exist), call finish() i
       result = await forceFinish(messages, FACEBOOK_TOOLS, 'Facebook Bot');
     }
   } finally {
-    await browser.close();
-    console.log('[Facebook Bot] Browser closed.');
+    await page.close();
+    console.log('[Facebook Bot] Research page closed (browser session kept alive).');
   }
 
   return result;
@@ -976,6 +1002,343 @@ app.get('/api/supervexor', async (req, res) => {
   }
 
   res.end();
+});
+
+// ─── Firecrawl deep-search: tools ────────────────────────────────────────────
+
+const DEEP_SEARCH_TOOLS = [
+  // ── Firecrawl: public web ──────────────────────────────────────────────────
+  {
+    name: 'search',
+    description: 'Search the web. Returns titles, URLs, and snippets. Use targeted queries combining name + known details.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'number', description: '1-10, default 5' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'scrape',
+    description: 'Fetch the full text of any public URL (Firecrawl). Use for people-finder pages, court records, property DBs, portfolio sites, or any external link found during research.',
+    input_schema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
+    },
+  },
+  // ── LinkedIn authenticated browser ────────────────────────────────────────
+  {
+    name: 'linkedin_navigate',
+    description: 'Navigate the live authenticated LinkedIn browser to a URL and return the full page text. Use for profiles, search results, or any LinkedIn URL.',
+    input_schema: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'LinkedIn URL to navigate to' } },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'linkedin_get_links',
+    description: 'Return all hyperlinks (href + text) visible on the current LinkedIn page. Use after linkedin_navigate to discover contact info links, portfolio URLs, website links, etc.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'linkedin_click',
+    description: 'Click an element on the current LinkedIn page by its visible text label, then return the updated page text. Use this to open modals — e.g. click "Contact info" to reveal email/phone/website hidden behind a modal.',
+    input_schema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'Visible text of the element to click' } },
+      required: ['text'],
+    },
+  },
+  // ── Facebook authenticated browser ────────────────────────────────────────
+  {
+    name: 'facebook_navigate',
+    description: 'Navigate the live authenticated Facebook browser to a URL and return the full page text.',
+    input_schema: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Facebook URL to navigate to' } },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'facebook_get_links',
+    description: 'Return all hyperlinks visible on the current Facebook page. Use after facebook_navigate to find contact info, website, or other linked pages.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'facebook_click',
+    description: 'Click an element on the current Facebook page by visible text, then return the updated page text. Use to expand sections or open contact info.',
+    input_schema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'Visible text of the element to click' } },
+      required: ['text'],
+    },
+  },
+  // ── Done ──────────────────────────────────────────────────────────────────
+  {
+    name: 'finish',
+    description: 'Research complete — return all findings.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        phone_numbers:      { type: 'array', items: { type: 'string' } },
+        email_addresses:    { type: 'array', items: { type: 'string' } },
+        physical_addresses: { type: 'array', items: { type: 'string' } },
+        properties:         { type: 'array', items: { type: 'string' } },
+        vehicles:           { type: 'array', items: { type: 'string' } },
+        employers:          { type: 'array', items: { type: 'string' } },
+        social_profiles:    { type: 'array', items: { type: 'string' } },
+        other_findings:     { type: 'array', items: { type: 'string' } },
+        sources:            { type: 'array', items: { type: 'string' } },
+        confidence:         { type: 'string', description: 'HIGH / MEDIUM / LOW' },
+      },
+      required: ['confidence'],
+    },
+  },
+];
+
+// ─── Firecrawl deep-search: agent loop ───────────────────────────────────────
+
+async function runDeepSearchAgent({ name: targetName, location, phone, email, physical_address, linkedin_url, facebook_url }) {
+  const firecrawlKey = process.env.FIRECRAWL_API_KEY;
+  if (!firecrawlKey) throw new Error('FIRECRAWL_API_KEY not set in .env');
+
+  const fc = new FirecrawlApp({ apiKey: firecrawlKey });
+
+  // Open persistent pages in the authenticated sessions for this run
+  let liPage = null;
+  let fbPage = null;
+  if (linkedInContext) {
+    liPage = await linkedInContext.newPage();
+    console.log('[DeepSearch] LinkedIn authenticated page ready.');
+  }
+  if (facebookContext) {
+    fbPage = await facebookContext.newPage();
+    console.log('[DeepSearch] Facebook authenticated page ready.');
+  }
+
+  const sessionInfo = [
+    liPage ? '✓ LinkedIn session active (use linkedin_navigate / linkedin_get_links / linkedin_click)' : '✗ LinkedIn session not available',
+    fbPage ? '✓ Facebook session active (use facebook_navigate / facebook_get_links / facebook_click)' : '✗ Facebook session not available',
+  ].join('\n');
+
+  const knownLines = [
+    location         && `Location: ${location}`,
+    phone            && `Phone: ${phone}`,
+    email            && `Email: ${email}`,
+    physical_address && `Known address: ${physical_address}`,
+    linkedin_url     && `LinkedIn: ${linkedin_url}`,
+    facebook_url     && `Facebook: ${facebook_url}`,
+  ].filter(Boolean);
+
+  const knownBlock = knownLines.length
+    ? `\nKnown details:\n${knownLines.map(l => `- ${l}`).join('\n')}`
+    : '';
+
+  const messages = [
+    {
+      role: 'user',
+      content: `You are an OSINT research agent. Collect every actionable detail about this person.
+
+Target: "${targetName}"${knownBlock}
+
+Browser sessions:
+${sessionInfo}
+
+Goal: phone numbers, emails, home/work addresses, property ownership, vehicles, employers,
+court records, social profiles, and any other info useful to a debt collector.
+
+You have 10 tool calls. Use them like a skilled investigator:
+
+1. If LinkedIn/Facebook URLs are known, start there with linkedin_navigate / facebook_navigate.
+2. IMMEDIATELY after loading a profile, call linkedin_get_links / facebook_get_links to see ALL
+   available links — including "Contact info", website, portfolio, email links.
+3. If you see a "Contact info" link or button, ALWAYS click it with linkedin_click("Contact info")
+   — this opens a modal containing email, phone, and website that is NOT in the raw page text.
+4. For any portfolio, personal website, or external URL you discover, scrape it with the scrape tool.
+5. Use search for public records, people-finders (whitepages, spokeo, truepeoplesearch), property
+   records, or anything not covered by the social profiles.
+6. Extract EVERY email address, phone number, and address you encounter — do not skip anything.
+7. Call finish() when done or after 8+ tool calls.
+
+Never ignore a visible data point. Never skip a promising link.`,
+    },
+  ];
+
+  let result = null;
+  const MAX_ITERATIONS = 10;
+
+  const pageText = async (page) => {
+    const text = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').trim());
+    return text.substring(0, 6000);
+  };
+
+  const pageLinks = async (page) => {
+    const links = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('a[href]'))
+        .map(a => ({ href: a.href, text: a.textContent?.trim() }))
+        .filter(l => l.href && l.text)
+        .slice(0, 80),
+    );
+    return JSON.stringify(links);
+  };
+
+  try {
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      const response = await client.messages.create({
+        model: 'claude-opus-4-6',
+        max_tokens: 4096,
+        tools: DEEP_SEARCH_TOOLS,
+        messages,
+      });
+
+      console.log(`[DeepSearch] Iteration ${i + 1}, stop_reason: ${response.stop_reason}`);
+      messages.push({ role: 'assistant', content: response.content });
+
+      if (response.stop_reason === 'end_turn') break;
+
+      if (response.stop_reason === 'tool_use') {
+        const toolResults = [];
+
+        for (const block of response.content) {
+          if (block.type !== 'tool_use') continue;
+
+          console.log(`[DeepSearch] Tool: ${block.name}`, JSON.stringify(block.input).substring(0, 120));
+
+          let output;
+
+          if (block.name === 'finish') {
+            result = block.input;
+            output = 'Research complete.';
+
+          } else if (block.name === 'search') {
+            try {
+              const limit = Math.min(block.input.limit ?? 5, 10);
+              const sr = await fc.search(block.input.query, { limit, scrapeOptions: { formats: ['markdown'] } });
+              output = JSON.stringify((sr?.data ?? []).map(r => ({
+                url: r.url, title: r.title,
+                content: (r.markdown ?? r.description ?? '').substring(0, 2000),
+              })));
+            } catch (err) { output = `Search failed: ${err.message}`; }
+
+          } else if (block.name === 'scrape') {
+            try {
+              const sr = await fc.scrapeUrl(block.input.url, { formats: ['markdown'] });
+              output = (sr?.markdown ?? 'No content').substring(0, 5000);
+            } catch (err) { output = `Scrape failed: ${err.message}`; }
+
+          // ── LinkedIn tools ────────────────────────────────────────────────
+          } else if (block.name === 'linkedin_navigate') {
+            if (!liPage) { output = 'LinkedIn session not available.'; }
+            else {
+              try {
+                await liPage.goto(block.input.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                await liPage.waitForTimeout(1500);
+                output = await pageText(liPage);
+              } catch (err) { output = `LinkedIn navigate failed: ${err.message}`; }
+            }
+          } else if (block.name === 'linkedin_get_links') {
+            if (!liPage) { output = 'LinkedIn session not available.'; }
+            else {
+              try { output = await pageLinks(liPage); }
+              catch (err) { output = `LinkedIn get_links failed: ${err.message}`; }
+            }
+          } else if (block.name === 'linkedin_click') {
+            if (!liPage) { output = 'LinkedIn session not available.'; }
+            else {
+              try {
+                await liPage.getByText(block.input.text, { exact: false }).first().click({ timeout: 6000 });
+                await liPage.waitForTimeout(1500);
+                output = await pageText(liPage);
+              } catch (err) { output = `LinkedIn click failed: ${err.message}`; }
+            }
+
+          // ── Facebook tools ────────────────────────────────────────────────
+          } else if (block.name === 'facebook_navigate') {
+            if (!fbPage) { output = 'Facebook session not available.'; }
+            else {
+              try {
+                await fbPage.goto(block.input.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                await fbPage.waitForTimeout(1500);
+                output = await pageText(fbPage);
+              } catch (err) { output = `Facebook navigate failed: ${err.message}`; }
+            }
+          } else if (block.name === 'facebook_get_links') {
+            if (!fbPage) { output = 'Facebook session not available.'; }
+            else {
+              try { output = await pageLinks(fbPage); }
+              catch (err) { output = `Facebook get_links failed: ${err.message}`; }
+            }
+          } else if (block.name === 'facebook_click') {
+            if (!fbPage) { output = 'Facebook session not available.'; }
+            else {
+              try {
+                await fbPage.getByText(block.input.text, { exact: false }).first().click({ timeout: 6000 });
+                await fbPage.waitForTimeout(1500);
+                output = await pageText(fbPage);
+              } catch (err) { output = `Facebook click failed: ${err.message}`; }
+            }
+
+          } else {
+            output = `Unknown tool: ${block.name}`;
+          }
+
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: String(output) });
+          if (block.name === 'finish') break;
+        }
+
+        messages.push({ role: 'user', content: toolResults });
+        if (result) break;
+      }
+    }
+
+    if (!result) {
+      console.log('[DeepSearch] Iteration limit reached — forcing finish.');
+      messages.push({
+        role: 'user',
+        content: 'You have reached the 10 tool call limit. Call finish() RIGHT NOW with everything found so far.',
+      });
+      const response = await client.messages.create({
+        model: 'claude-opus-4-6', max_tokens: 2048,
+        tools: DEEP_SEARCH_TOOLS, messages,
+      });
+      for (const block of response.content ?? []) {
+        if (block.type === 'tool_use' && block.name === 'finish') { result = block.input; break; }
+      }
+    }
+  } finally {
+    if (liPage) await liPage.close();
+    if (fbPage) await fbPage.close();
+  }
+
+  return result ?? { confidence: 'LOW', other_findings: ['Agent exhausted without returning results.'] };
+}
+
+// ─── Firecrawl deep-search: endpoint ─────────────────────────────────────────
+
+app.post('/api/deep-search', async (req, res) => {
+  const { name, location, phone, email, physical_address, linkedin_url, facebook_url } = req.body ?? {};
+
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+
+  if (!process.env.FIRECRAWL_API_KEY) {
+    return res.status(500).json({ error: 'FIRECRAWL_API_KEY not set in .env' });
+  }
+
+  try {
+    const data = await runDeepSearchAgent({
+      name: name.trim(), location, phone, email, physical_address, linkedin_url, facebook_url,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[DeepSearch] Error:', err.message);
+    res.status(500).json({ error: err.message ?? 'Deep search failed' });
+  }
 });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));

@@ -1,4 +1,7 @@
-import { ExternalLink, Zap, Phone, Mail, MapPin } from "lucide-react";
+import { useState } from "react";
+import { ExternalLink, Zap, Phone, Mail, MapPin, Search, Loader2, Home, Car, Briefcase, Globe, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+
+const BOT_URL = "http://localhost:3001";
 
 interface TopMatch {
   rank: number;
@@ -21,6 +24,19 @@ interface SummaryData {
   analysis_notes?: string;
 }
 
+interface DeepSearchResult {
+  phone_numbers?: string[];
+  email_addresses?: string[];
+  physical_addresses?: string[];
+  properties?: string[];
+  vehicles?: string[];
+  employers?: string[];
+  social_profiles?: string[];
+  other_findings?: string[];
+  sources?: string[];
+  confidence?: string;
+}
+
 interface Props { data: SummaryData }
 
 const confStyle: Record<string, { badge: string; border: string; glow: string }> = {
@@ -30,6 +46,149 @@ const confStyle: Record<string, { badge: string; border: string; glow: string }>
 };
 
 const rankLabel = ['#1', '#2', '#3'];
+
+function DeepSearchSection({ match }: { match: TopMatch }) {
+  const [loading, setLoading]   = useState(false);
+  const [result, setResult]     = useState<DeepSearchResult | null>(null);
+  const [error, setError]       = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(true);
+
+  const run = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch(`${BOT_URL}/api/deep-search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:             match.name,
+          location:         match.location ?? match.physical_address,
+          phone:            match.phone,
+          email:            match.email,
+          physical_address: match.physical_address,
+          linkedin_url:     match.linkedin_url,
+          facebook_url:     match.facebook_url,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Deep search failed');
+      setResult(json.data);
+    } catch (err: any) {
+      setError(err.message ?? 'Deep search failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confClass = result?.confidence
+    ? confStyle[result.confidence.toUpperCase()] ?? confStyle.LOW
+    : null;
+
+  return (
+    <div className="border-t border-border/50 pt-3 space-y-2">
+      {!result && !loading && (
+        <button
+          onClick={run}
+          className="flex items-center gap-2 text-[11px] font-mono px-3 py-1.5 rounded border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 transition-colors"
+        >
+          <Search className="w-3 h-3" />
+          Make in-depth search for this user
+        </button>
+      )}
+
+      {loading && (
+        <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground">
+          <Loader2 className="w-3 h-3 animate-spin text-primary" />
+          Running Firecrawl deep search (up to 15 queries)…
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-2 text-[11px] font-mono text-red-400">
+          <AlertCircle className="w-3 h-3 flex-shrink-0" />
+          {error}
+          <button onClick={run} className="underline hover:no-underline ml-1">retry</button>
+        </div>
+      )}
+
+      {result && (
+        <div className="space-y-2">
+          {/* Header row */}
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="w-full flex items-center justify-between text-[10px] font-mono text-primary/80 hover:text-primary transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <Search className="w-3 h-3" />
+              FIRECRAWL DEEP SEARCH RESULTS
+              {confClass && (
+                <span className={`px-1.5 py-0.5 rounded border text-[9px] ${confClass.badge} ml-1`}>
+                  {result.confidence}
+                </span>
+              )}
+            </span>
+            {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+
+          {expanded && (
+            <div className="space-y-2 pl-1">
+              <DataGroup icon={<Phone className="w-3 h-3 text-primary/60" />}   label="Phone numbers"    items={result.phone_numbers} />
+              <DataGroup icon={<Mail className="w-3 h-3 text-primary/60" />}    label="Email addresses"  items={result.email_addresses} />
+              <DataGroup icon={<MapPin className="w-3 h-3 text-primary/60" />}  label="Addresses"        items={result.physical_addresses} />
+              <DataGroup icon={<Home className="w-3 h-3 text-primary/60" />}    label="Properties"       items={result.properties} />
+              <DataGroup icon={<Car className="w-3 h-3 text-primary/60" />}     label="Vehicles"         items={result.vehicles} />
+              <DataGroup icon={<Briefcase className="w-3 h-3 text-primary/60" />} label="Employers"      items={result.employers} />
+              <DataGroup icon={<Globe className="w-3 h-3 text-primary/60" />}   label="Social profiles"  items={result.social_profiles} />
+              <DataGroup icon={<Search className="w-3 h-3 text-primary/60" />}  label="Other findings"   items={result.other_findings} />
+
+              {result.sources && result.sources.length > 0 && (
+                <div className="pt-1 border-t border-border/30">
+                  <p className="text-[9px] font-mono text-muted-foreground/50 mb-1">Sources</p>
+                  <div className="space-y-0.5">
+                    {result.sources.map((s, i) => (
+                      <a key={i} href={s} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground/60 hover:text-blue-400 transition-colors truncate">
+                        <ExternalLink className="w-2.5 h-2.5 flex-shrink-0" />
+                        {s}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={run}
+                className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/50 hover:text-primary transition-colors pt-1"
+              >
+                <Search className="w-2.5 h-2.5" /> Re-run search
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DataGroup({ icon, label, items }: { icon: React.ReactNode; label: string; items?: string[] }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div>
+      <p className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground/60 uppercase tracking-wider mb-0.5">
+        {icon} {label}
+      </p>
+      <ul className="space-y-0.5 pl-4">
+        {items.map((item, i) => (
+          <li key={i} className="text-[11px] font-mono text-foreground/80 flex gap-1.5">
+            <span className="text-primary/40 flex-shrink-0">▸</span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export default function SuperVexorSummary({ data }: Props) {
   const { top_matches, analysis_notes } = data;
@@ -101,7 +260,7 @@ export default function SuperVexorSummary({ data }: Props) {
                   </div>
                 </div>
 
-                {/* Contact details — shown for all matches that have data, highlighted on #1 */}
+                {/* Contact details from master analysis */}
                 {(match.phone || match.email || match.location || match.physical_address) && (
                   <div className={`flex flex-col gap-1.5 px-3 py-2 rounded border ${i === 0 ? 'border-primary/30 bg-primary/5' : 'border-border/50 bg-surface-3/50'}`}>
                     {match.phone && (
@@ -156,6 +315,9 @@ export default function SuperVexorSummary({ data }: Props) {
                     {match.reasoning}
                   </p>
                 )}
+
+                {/* Deep search */}
+                <DeepSearchSection match={match} />
               </div>
             );
           })}
