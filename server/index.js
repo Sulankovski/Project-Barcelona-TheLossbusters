@@ -149,9 +149,12 @@ const TOOLS = [
                   },
                 },
               },
-              skills:      { type: 'array', items: { type: 'string' } },
-              connections: { type: 'string' },
-              notes:       { type: 'string' },
+              skills:           { type: 'array', items: { type: 'string' } },
+              connections:      { type: 'string' },
+              phone:            { type: 'string', description: 'Phone number if visible on profile or in Contact Info section' },
+              email:            { type: 'string', description: 'Email address if visible on profile or in Contact Info section' },
+              physical_address: { type: 'string', description: 'Physical/mailing address if visible on profile' },
+              notes:            { type: 'string' },
             },
           },
         },
@@ -403,7 +406,9 @@ Step 3 — Visit each of the 5 profiles one by one:
   a. navigate to the profile page
   b. wait 300ms
   c. get_page_text to read name, headline, location, company, about, experience, education, skills, connections
-  d. Record the data and assign match_confidence HIGH/MEDIUM/LOW vs the known details
+  d. If the page text contains a "Contact info" section or any phone/email/address data, extract it
+  e. Record the data and assign match_confidence HIGH/MEDIUM/LOW vs the known details
+  f. Capture phone, email, and physical_address whenever they appear anywhere on the page text
 
 Step 4 — After visiting all 5 (or fewer if less exist), call finish() immediately.
 
@@ -624,6 +629,9 @@ const FACEBOOK_FINISH_TOOL = {
             },
             interests:        { type: 'array', items: { type: 'string' } },
             recent_activity:  { type: 'array', items: { type: 'string' } },
+            phone:            { type: 'string', description: 'Phone number if visible on the profile or About/Contact tab' },
+            email:            { type: 'string', description: 'Email address if visible on the profile or About/Contact tab' },
+            physical_address: { type: 'string', description: 'Physical/home address if visible on the profile or About tab' },
             contact_info: {
               type: 'array',
               items: {
@@ -712,7 +720,8 @@ Step 3 — Visit each of the 5 profiles one by one:
   c. get_page_text to read the profile
   d. navigate to profile URL + /about
   e. get_page_text to read structured info (work, education, location, contact)
-  f. Note the data, assign match_confidence HIGH/MEDIUM/LOW vs the known details
+  f. Extract phone, email, and physical_address if they appear anywhere in the page text or About section
+  g. Note the data, assign match_confidence HIGH/MEDIUM/LOW vs the known details
 
 Step 4 — After visiting all 5 (or fewer if less than 5 exist), call finish() immediately.
 
@@ -823,6 +832,150 @@ app.post('/api/facebook-bot', async (req, res) => {
     console.error('[Facebook Bot] Error:', err);
     res.status(500).json({ error: err.message ?? 'Internal server error' });
   }
+});
+
+// ─── SuperVexor: master analysis ─────────────────────────────────────────────
+
+async function runMasterAnalysis({ name, country, phone, address, additionalInfo, linkedinResult, facebookResult }) {
+  const liProfiles = linkedinResult?.profiles ?? [];
+  const fbProfiles = facebookResult?.profiles ?? [];
+
+  if (liProfiles.length === 0 && fbProfiles.length === 0) {
+    return { top_matches: [], analysis_notes: 'No profiles found on either platform.' };
+  }
+
+  const contextLines = [
+    country        && `Country: ${country}`,
+    phone          && `Phone: ${phone}`,
+    address        && `Address: ${address}`,
+    additionalInfo && `Additional info: ${additionalInfo}`,
+  ].filter(Boolean).join('\n');
+
+  const prompt = `You are SuperVexor, a master OSINT intelligence analyst.
+
+Search target: "${name}"
+${contextLines}
+
+LinkedIn profiles found (${liProfiles.length}):
+${JSON.stringify(liProfiles, null, 2)}
+
+Facebook profiles found (${fbProfiles.length}):
+${JSON.stringify(fbProfiles, null, 2)}
+
+Your task:
+1. Analyze all profiles across both platforms.
+2. Identify the top 3 most reliable matches for the target person.
+3. Cross-reference LinkedIn + Facebook data where profiles appear to be the same person.
+4. For each match give a detailed, human-readable description.
+
+Return ONLY valid JSON — no markdown, no prose outside the JSON:
+{
+  "top_matches": [
+    {
+      "rank": 1,
+      "name": "Full name",
+      "confidence": "HIGH|MEDIUM|LOW",
+      "reasoning": "Concise explanation of why this is a strong match",
+      "summary": "2-3 sentence detailed description of this person",
+      "key_facts": ["fact 1", "fact 2", "fact 3"],
+      "linkedin_url": "url or null",
+      "facebook_url": "url or null",
+      "cross_platform_match": true,
+      "phone": "best phone number found across all profile data for this person, or null",
+      "email": "best email address found across all profile data for this person, or null",
+      "location": "most specific location found (city, country) across all profiles, or null",
+      "physical_address": "physical/home address if found in any profile data, or null"
+    }
+  ],
+  "analysis_notes": "Overall observations about the search and data quality"
+}`;
+
+  const response = await client.messages.create({
+    model: 'claude-opus-4-6',
+    max_tokens: 4096,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const text = response.content[0]?.text ?? '';
+  try {
+    const stripped = text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+    const first = stripped.indexOf('{');
+    const last  = stripped.lastIndexOf('}');
+    return JSON.parse(stripped.slice(first, last + 1));
+  } catch {
+    return { top_matches: [], analysis_notes: text };
+  }
+}
+
+// ─── SuperVexor: SSE orchestration endpoint ───────────────────────────────────
+
+app.get('/api/supervexor', async (req, res) => {
+  const { name, country, phone, address, additionalInfo } = req.query;
+
+  if (!name || String(name).trim().length < 2) {
+    return res.status(400).json({ error: 'name required' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  const send = (event, data) => {
+    if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const params = {
+    name:           String(name).trim(),
+    country:        country        ? String(country).trim()        : undefined,
+    phone:          phone          ? String(phone).trim()          : undefined,
+    address:        address        ? String(address).trim()        : undefined,
+    additionalInfo: additionalInfo ? String(additionalInfo).trim() : undefined,
+  };
+
+  let linkedinResult = null;
+  let facebookResult = null;
+
+  // ── Phase 1 + 2: LinkedIn + Facebook in parallel ───────────────────────────
+  send('progress', { phase: 'linkedin', stage: 'login', message: 'Opening LinkedIn — please log in...' });
+  send('progress', { phase: 'facebook', stage: 'login', message: 'Opening Facebook — please log in...' });
+
+  const liPromise = runLinkedInAgent(params)
+    .then(result => {
+      linkedinResult = result;
+      send('linkedin_done', { data: result });
+      send('progress', { phase: 'linkedin', stage: 'done', message: `LinkedIn complete — ${result?.profiles?.length ?? 0} profiles found` });
+    })
+    .catch(err => {
+      console.error('[SuperVexor] LinkedIn error:', err.message);
+      send('progress', { phase: 'linkedin', stage: 'error', message: `LinkedIn failed: ${err.message}` });
+    });
+
+  const fbPromise = runFacebookAgent(params)
+    .then(result => {
+      facebookResult = result;
+      send('facebook_done', { data: result });
+      send('progress', { phase: 'facebook', stage: 'done', message: `Facebook complete — ${result?.profiles?.length ?? 0} profiles found` });
+    })
+    .catch(err => {
+      console.error('[SuperVexor] Facebook error:', err.message);
+      send('progress', { phase: 'facebook', stage: 'error', message: `Facebook failed: ${err.message}` });
+    });
+
+  await Promise.all([liPromise, fbPromise]);
+
+  // ── Phase 3: Master analysis ───────────────────────────────────────────────
+  try {
+    send('progress', { phase: 'analysis', stage: 'running', message: 'Master agent cross-referencing all data...' });
+    const summary = await runMasterAnalysis({ ...params, linkedinResult, facebookResult });
+    send('complete', { summary });
+  } catch (err) {
+    console.error('[SuperVexor] Analysis error:', err.message);
+    send('error', { message: `Analysis failed: ${err.message}` });
+  }
+
+  res.end();
 });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));

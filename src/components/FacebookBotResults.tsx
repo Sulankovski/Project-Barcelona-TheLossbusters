@@ -1,4 +1,4 @@
-import { MapPin, Briefcase, GraduationCap, Users, ExternalLink, User, Heart, Image } from "lucide-react";
+import { MapPin, Briefcase, GraduationCap, Users, ExternalLink, User, Heart, Image, Phone, Mail, Home } from "lucide-react";
 
 interface WorkEntry    { employer?: string; title?: string; duration?: string }
 interface EducationEntry { school?: string; degree?: string; years?: string }
@@ -18,6 +18,9 @@ export interface FacebookProfile {
   education?: EducationEntry[];
   interests?: string[];
   recent_activity?: string[];
+  phone?: string;
+  email?: string;
+  physical_address?: string;
   contact_info?: ContactEntry[];
   notes?: string;
 }
@@ -146,10 +149,30 @@ function ProfileCard({ profile, index }: { profile: FacebookProfile; index: numb
         </div>
       )}
 
-      {/* Contact info */}
-      {profile.contact_info && profile.contact_info.length > 0 && (
-        <div className="space-y-0.5">
-          {profile.contact_info.map((c, i) => (
+      {/* Contact info — explicit fields first, then any extras from contact_info array */}
+      {(profile.phone || profile.email || profile.physical_address || (profile.contact_info && profile.contact_info.length > 0)) && (
+        <div className="space-y-0.5 border-t border-border/50 pt-2">
+          {profile.phone && (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-foreground/80">
+              <Phone className="w-3 h-3 text-blue-500 flex-shrink-0" />
+              {profile.phone}
+            </div>
+          )}
+          {profile.email && (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-foreground/80">
+              <Mail className="w-3 h-3 text-blue-500 flex-shrink-0" />
+              {profile.email}
+            </div>
+          )}
+          {profile.physical_address && (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-foreground/80">
+              <Home className="w-3 h-3 text-blue-500 flex-shrink-0" />
+              {profile.physical_address}
+            </div>
+          )}
+          {profile.contact_info?.filter(c =>
+            c.type.toLowerCase() !== 'phone' && c.type.toLowerCase() !== 'email' && c.type.toLowerCase() !== 'address'
+          ).map((c, i) => (
             <div key={i} className="flex gap-2 text-[11px] font-mono">
               <span className="text-muted-foreground capitalize">{c.type}:</span>
               <span className="text-foreground/80">{c.value}</span>

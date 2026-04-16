@@ -1,4 +1,4 @@
-import { MapPin, Briefcase, GraduationCap, Star, ExternalLink, User } from "lucide-react";
+import { MapPin, Briefcase, GraduationCap, Star, ExternalLink, User, Phone, Mail, Home } from "lucide-react";
 
 interface Experience {
   title?: string;
@@ -25,6 +25,9 @@ export interface LinkedInProfile {
   education?: Education[];
   skills?: string[];
   connections?: string;
+  phone?: string;
+  email?: string;
+  physical_address?: string;
   notes?: string;
 }
 
@@ -153,6 +156,30 @@ function ProfileCard({ profile, index }: { profile: LinkedInProfile; index: numb
               </span>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Contact info */}
+      {(profile.phone || profile.email || profile.physical_address) && (
+        <div className="space-y-0.5 border-t border-border/50 pt-2">
+          {profile.phone && (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-foreground/80">
+              <Phone className="w-3 h-3 text-blue-400 flex-shrink-0" />
+              {profile.phone}
+            </div>
+          )}
+          {profile.email && (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-foreground/80">
+              <Mail className="w-3 h-3 text-blue-400 flex-shrink-0" />
+              {profile.email}
+            </div>
+          )}
+          {profile.physical_address && (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-foreground/80">
+              <Home className="w-3 h-3 text-blue-400 flex-shrink-0" />
+              {profile.physical_address}
+            </div>
+          )}
         </div>
       )}
 
