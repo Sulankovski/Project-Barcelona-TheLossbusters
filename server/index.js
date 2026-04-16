@@ -280,39 +280,60 @@ async function executeTool(page, toolName, input) {
 // ─── LinkedIn login via Google OAuth ─────────────────────────────────────────
 
 async function loginToLinkedIn(page) {
-  console.log('[LinkedIn Bot] Opening LinkedIn login page...');
+  console.log('[LinkedIn Bot] Loading LinkedIn...');
+
+  page.setDefaultTimeout(300000); // 5 min — user needs time to log in
 
   await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 20000 });
   await page.waitForTimeout(1500);
 
-  // Check if already logged in
-  if (page.url().includes('/feed') || page.url().includes('/mynetwork')) {
-    console.log('[LinkedIn Bot] Already logged in, skipping login step.');
+  // Check already logged in: not on an auth page + search bar present
+  const alreadyLoggedIn = await page.evaluate(() => {
+    const url = window.location.href;
+    const onAuthPage = url.includes('/login') || url.includes('/checkpoint') || url.includes('/uas/');
+    const hasSearchBar = !!(
+      document.querySelector('input[role="combobox"]') ||
+      document.querySelector('.search-global-typeahead') ||
+      document.querySelector('input[placeholder*="Search"]')
+    );
+    return !onAuthPage && hasSearchBar;
+  });
+
+  if (alreadyLoggedIn) {
+    console.log('[LinkedIn Bot] Already logged in.');
     return;
   }
 
   console.log('');
   console.log('════════════════════════════════════════════════════');
-  console.log('  ACTION REQUIRED: Please log in to LinkedIn in the');
-  console.log('  browser window that just opened.');
-  console.log('  Click "Sign in with Google" and complete the flow.');
-  console.log('  The bot will continue automatically once you are');
-  console.log('  on the LinkedIn feed. (timeout: 2 minutes)');
+  console.log('  ACTION REQUIRED in the browser window:');
+  console.log('  Log in to LinkedIn — click "Sign in with Google"');
+  console.log('  and complete the full Google OAuth flow.');
+  console.log('');
+  console.log('  *** The bot will NOT move until LinkedIn\'s      ***');
+  console.log('  *** search bar is visible (logged-in state).    ***');
+  console.log('  (timeout: 5 minutes)');
   console.log('════════════════════════════════════════════════════');
   console.log('');
 
-  // Wait up to 2 minutes for the user to complete login manually
-  try {
-    await page.waitForURL(
-      url => url.includes('linkedin.com/feed') || url.includes('linkedin.com/mynetwork') || url.includes('linkedin.com/in/'),
-      { timeout: 120000 }
-    );
-    console.log('[LinkedIn Bot] Login detected — continuing.');
-  } catch {
-    console.log('[LinkedIn Bot] Login timeout — proceeding anyway.');
-  }
+  // HARD BLOCK — polls every 300ms for the search bar that only appears when authenticated
+  await page.waitForFunction(
+    () => {
+      const url = window.location.href;
+      const onAuthPage = url.includes('/login') || url.includes('/checkpoint') || url.includes('/uas/');
+      const hasSearchBar = !!(
+        document.querySelector('input[role="combobox"]') ||
+        document.querySelector('.search-global-typeahead') ||
+        document.querySelector('input[placeholder*="Search"]')
+      );
+      return !onAuthPage && hasSearchBar;
+    },
+    null,
+    { timeout: 300000, polling: 300 },
+  );
 
   await page.waitForTimeout(2000);
+  console.log('[LinkedIn Bot] Login confirmed ✓ — search bar detected. Starting search.');
 }
 
 // ─── Main agentic loop ────────────────────────────────────────────────────────
