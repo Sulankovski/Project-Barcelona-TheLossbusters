@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npm install *)",
       "Bash(npx playwright *)",
-      "Bash(node -e \"const lr = require\\('./node_modules/lucide-react/dist/cjs/lucide-react.js'\\); console.log\\('Linkedin' in lr\\)\")"
+      "Bash(node -e \"const lr = require\\('./node_modules/lucide-react/dist/cjs/lucide-react.js'\\); console.log\\('Linkedin' in lr\\)\")",
+      "Bash(curl -s \"https://vexorai.eu/\")",
+      "Bash(curl *)"
     ]
   }
 }

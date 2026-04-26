@@ -232,9 +232,7 @@ export default function Index() {
       <header className="border-b border-border bg-surface-1">
         <div className="max-w-[900px] mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded bg-primary flex items-center justify-center">
-              <Radar className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src="/vexor-logo.svg" alt="Vexor" className="w-8 h-8" />
             <div>
               <h1 className="font-mono font-bold text-foreground text-sm tracking-tight flex items-center gap-2">
                 VEXOR <span className="text-primary">INTELLIGENCE</span>

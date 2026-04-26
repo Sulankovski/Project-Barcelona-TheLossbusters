@@ -3,6 +3,12 @@ import { ExternalLink, Zap, Phone, Mail, MapPin, Search, Loader2, Home, Car, Bri
 
 const BOT_URL = "http://localhost:3001";
 
+function toAbsoluteUrl(url: string): string {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
+}
+
 interface TopMatch {
   rank: number;
   name?: string;
@@ -147,7 +153,7 @@ function DeepSearchSection({ match }: { match: TopMatch }) {
                   <p className="text-[9px] font-mono text-muted-foreground/50 mb-1">Sources</p>
                   <div className="space-y-0.5">
                     {result.sources.map((s, i) => (
-                      <a key={i} href={s} target="_blank" rel="noopener noreferrer"
+                      <a key={i} href={toAbsoluteUrl(s)} target="_blank" rel="noopener noreferrer"
                         className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground/60 hover:text-blue-400 transition-colors truncate">
                         <ExternalLink className="w-2.5 h-2.5 flex-shrink-0" />
                         {s}
@@ -245,13 +251,13 @@ export default function SuperVexorSummary({ data }: Props) {
                     {/* Platform links */}
                     <div className="flex gap-3 mt-1">
                       {match.linkedin_url && (
-                        <a href={match.linkedin_url} target="_blank" rel="noopener noreferrer"
+                        <a href={toAbsoluteUrl(match.linkedin_url)} target="_blank" rel="noopener noreferrer"
                           className="flex items-center gap-1 text-[10px] font-mono text-blue-400 hover:text-blue-300 transition-colors">
                           LinkedIn <ExternalLink className="w-2.5 h-2.5" />
                         </a>
                       )}
                       {match.facebook_url && (
-                        <a href={match.facebook_url} target="_blank" rel="noopener noreferrer"
+                        <a href={toAbsoluteUrl(match.facebook_url)} target="_blank" rel="noopener noreferrer"
                           className="flex items-center gap-1 text-[10px] font-mono text-blue-500 hover:text-blue-400 transition-colors">
                           Facebook <ExternalLink className="w-2.5 h-2.5" />
                         </a>

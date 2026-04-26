@@ -1,5 +1,11 @@
 import { MapPin, Briefcase, GraduationCap, Star, ExternalLink, User, Phone, Mail, Home } from "lucide-react";
 
+function toAbsoluteUrl(url: string): string {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
+}
+
 interface Experience {
   title?: string;
   company?: string;
@@ -90,7 +96,7 @@ function ProfileCard({ profile, index }: { profile: LinkedInProfile; index: numb
         </div>
         {profile.profile_url && (
           <a
-            href={profile.profile_url}
+            href={toAbsoluteUrl(profile.profile_url)}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-blue-400 transition-colors flex-shrink-0"

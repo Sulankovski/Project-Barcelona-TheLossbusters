@@ -1,5 +1,11 @@
 import { MapPin, Briefcase, GraduationCap, Users, ExternalLink, User, Heart, Image, Phone, Mail, Home } from "lucide-react";
 
+function toAbsoluteUrl(url: string): string {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
+}
+
 interface WorkEntry    { employer?: string; title?: string; duration?: string }
 interface EducationEntry { school?: string; degree?: string; years?: string }
 interface ContactEntry  { type: string; value: string }
@@ -88,7 +94,7 @@ function ProfileCard({ profile, index }: { profile: FacebookProfile; index: numb
           </div>
         </div>
         {profile.profile_url && (
-          <a href={profile.profile_url} target="_blank" rel="noopener noreferrer"
+          <a href={toAbsoluteUrl(profile.profile_url)} target="_blank" rel="noopener noreferrer"
             className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-blue-400 transition-colors flex-shrink-0">
             View <ExternalLink className="w-3 h-3" />
           </a>
